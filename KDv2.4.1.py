@@ -8,6 +8,10 @@ from torch.amp import GradScaler, autocast
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from collections import defaultdict
 
+from datasets import load_dataset
+from evaluate import load
+from tqdm import tqdm
+
 # **Load Models**
 # Load Teacher and Student Models
 #teacher_model_name = "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B"
@@ -72,6 +76,19 @@ validation_df = pd.read_parquet("hf://datasets/rajpurkar/squad/" + splits["valid
 # We can use the full dataset again once we know the code is working.
 
 ##### Dataset size reduction code here #####
+reduced_train_df = train_df.sample(frac=0.05, random_state=42)
+reduced_validation_df = validation_df.sample(frac=0.05, random_state=42)
+
+print(f"Original train size: {len(train_df)}")
+print(f"Original valid size: {len(validation_df)}")
+print(f"Reduced train size: {len(reduced_train_df)}")
+print(f"Reduced valid size: {len(reduced_validation_df)}")
+
+full_train_df = train_df
+train_df = reduced_train_df
+
+full_validation_df = validation_df
+validation_df = reduced_validation_df
 
 # Convert DataFrame to a list of dictionaries for batch processing
 train_data = train_df.to_dict(orient="records")
@@ -123,6 +140,67 @@ val_loader = DataLoader(validation_dataset, batch_size=4, shuffle=True)
 
 #### Evaluation Code Here ####
 
+#### Evaluation Code Here ####
+
+
+# Load SQuAD metric
+squad_metric = load("squad")
+
+# Evaluation function
+def evaluate_model(model, tokenizer, data, max_length=256, device="cuda"):
+    # Ensure pad_token is set
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token  # Use EOS token as PAD token if undefined
+    #model.config.pad_token_id = tokenizer.pad_token_id
+    model.config.pad_token_id = tokenizer.eos_token_id
+    
+    model.eval()
+    model.to(device)
+
+    predictions = []
+    references = []
+
+    print(f"Evaluating on full validation set: {len(data)} examples")
+    
+    for example in tqdm(data):
+        question = example["question"]
+        context = example["context"]
+        true_answers = example["answers"]["text"]
+
+        input_text = f"{question} {tokenizer.sep_token} {context}"
+        inputs = tokenizer(
+            input_text,
+            return_tensors="pt",
+            truncation=True,
+            max_length=max_length
+        ).to(device)
+
+        with torch.no_grad():
+            output_ids = model.generate(
+                **inputs,
+                max_length=512,
+                do_sample=False
+            )
+
+        pred_answer = tokenizer.decode(output_ids[0], skip_special_tokens=True)
+
+        predictions.append({"id": example["id"], "prediction_text": pred_answer})
+        references.append({"id": example["id"], "answers": example["answers"]})
+
+    results = squad_metric.compute(predictions=predictions, references=references)
+    print(f"Exact Match (EM): {results['exact_match']:.2f}")
+    print(f"F1 Score: {results['f1']:.2f}")
+    return results
+
+
+# ** Evaluate the post-distillation performance of the Student model and display results **
+print("==== Pre-Distillation Evaluation ====")
+
+print("\n🔹 Teacher Model:")
+evaluate_model(teacher_model, teacher_tokenizer, validation_data)
+
+print("\n🔹 Student Model:")
+evaluate_model(student_model, student_tokenizer, validation_data)
 #### Results Display Code HERE ####
 
 # **Teacher Vocab is much larger than Students so need to configure a projection layer so both tensors will align**
@@ -253,64 +331,7 @@ train_student_with_distillation(
     epochs=3
 )
 
-# ** Evaluate the post-distillation performance of the Student model and display results **
-print("==== Pre-Distillation Evaluation ====")
-
-print("\n🔹 Teacher Model:")
-evaluate_model(teacher_model, teacher_tokenizer, validation_data)
-
-print("\n🔹 Student Model:")
-evaluate_model(student_model, student_tokenizer, validation_data)
-
-#### Evaluation Code Here ####
-from datasets import load_metric
-from tqdm import tqdm
-
-# Load SQuAD metric
-squad_metric = load_metric("squad")
-
-# Evaluation function
-def evaluate_model(model, tokenizer, data, max_length=256, device="cuda"):
-    model.eval()
-    model.to(device)
-
-    predictions = []
-    references = []
-
-    print(f"Evaluating on full validation set: {len(data)} examples")
-    
-    for example in tqdm(data):
-        question = example["question"]
-        context = example["context"]
-        true_answers = example["answers"]["text"]
-
-        input_text = f"{question} {tokenizer.sep_token} {context}"
-        inputs = tokenizer(
-            input_text,
-            return_tensors="pt",
-            truncation=True,
-            max_length=max_length
-        ).to(device)
-
-        with torch.no_grad():
-            output_ids = model.generate(
-                **inputs,
-                max_length=64,
-                do_sample=False
-            )
-
-        pred_answer = tokenizer.decode(output_ids[0], skip_special_tokens=True)
-
-        predictions.append({"id": example["id"], "prediction_text": pred_answer})
-        references.append({"id": example["id"], "answers": example["answers"]})
-
-    results = squad_metric.compute(predictions=predictions, references=references)
-    print(f"Exact Match (EM): {results['exact_match']:.2f}")
-    print(f"F1 Score: {results['f1']:.2f}")
-    return results
-
 #### Results Display Code HERE ####
-
 print("\n==== Post-Distillation Evaluation ====")
 
 print("\n🔹 Student Model:")
