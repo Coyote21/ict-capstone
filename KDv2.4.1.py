@@ -1,16 +1,20 @@
 # **Initial Setup**
-
+import math
 import pandas as pd
 import torch
 from torch import nn
 from torch.utils.data import DataLoader
-from torch.amp import GradScaler, autocast
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from collections import defaultdict
 
-from datasets import load_dataset
+#from datasets import load_dataset
 from evaluate import load
 from tqdm import tqdm
+
+loader_batch_size = 16
+
+# Set calculation device as either "cuda" (GPU) or "cpu"
+device = "cuda" if torch.cuda.is_available() else "cpu"
 
 # **Load Models**
 # Load Teacher and Student Models
@@ -24,6 +28,14 @@ student_model = AutoModelForCausalLM.from_pretrained(student_model_name)
 
 teacher_tokenizer = AutoTokenizer.from_pretrained(teacher_model_name)
 student_tokenizer = AutoTokenizer.from_pretrained(student_model_name)
+
+# Add padding tokens if missing and reconfigure models
+for tokenizer, model in [(teacher_tokenizer, teacher_model), (student_tokenizer, student_model)]:
+    if tokenizer.pad_token is None:
+        tokenizer.add_special_tokens({'pad_token': '[PAD]'})
+        model.resize_token_embeddings(len(tokenizer))
+        model.config.pad_token_id = tokenizer.pad_token_id
+
 
 # **Dataset Processing**
 
@@ -76,8 +88,8 @@ validation_df = pd.read_parquet("hf://datasets/rajpurkar/squad/" + splits["valid
 # We can use the full dataset again once we know the code is working.
 
 ##### Dataset size reduction code here #####
-reduced_train_df = train_df.sample(frac=0.05, random_state=42)
-reduced_validation_df = validation_df.sample(frac=0.05, random_state=42)
+reduced_train_df = train_df.sample(frac=0.01, random_state=42)
+reduced_validation_df = validation_df.sample(frac=0.01, random_state=42)
 
 print(f"Original train size: {len(train_df)}")
 print(f"Original valid size: {len(validation_df)}")
@@ -89,6 +101,8 @@ train_df = reduced_train_df
 
 full_validation_df = validation_df
 validation_df = reduced_validation_df
+
+total_batches = math.ceil(len(train_df) / loader_batch_size)
 
 # Convert DataFrame to a list of dictionaries for batch processing
 train_data = train_df.to_dict(orient="records")
@@ -133,27 +147,16 @@ def process_dataset(data, tokenizer):
 train_dataset = process_dataset(train_data, student_tokenizer)
 validation_dataset = process_dataset(validation_data, student_tokenizer)
 
-train_loader = DataLoader(train_dataset, batch_size=4, shuffle=True)
-val_loader = DataLoader(validation_dataset, batch_size=4, shuffle=True)
+train_loader = DataLoader(train_dataset, batch_size=loader_batch_size, shuffle=True)
+val_loader = DataLoader(validation_dataset, batch_size=loader_batch_size, shuffle=True)
 
 # ** Evaluate the pre-distillation performance of both Teacher and Student model and display results **
-
-#### Evaluation Code Here ####
-
-#### Evaluation Code Here ####
-
 
 # Load SQuAD metric
 squad_metric = load("squad")
 
 # Evaluation function
-def evaluate_model(model, tokenizer, data, max_length=256, device="cuda"):
-    # Ensure pad_token is set
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token  # Use EOS token as PAD token if undefined
-    #model.config.pad_token_id = tokenizer.pad_token_id
-    model.config.pad_token_id = tokenizer.eos_token_id
-    
+def evaluate_model(model, tokenizer, data, max_length=256):
     model.eval()
     model.to(device)
 
@@ -172,13 +175,16 @@ def evaluate_model(model, tokenizer, data, max_length=256, device="cuda"):
             input_text,
             return_tensors="pt",
             truncation=True,
+            padding=True,
             max_length=max_length
         ).to(device)
 
         with torch.no_grad():
             output_ids = model.generate(
-                **inputs,
+                input_ids=inputs["input_ids"],
+                attention_mask=inputs["attention_mask"],  # Explicit attention mask
                 max_length=512,
+                pad_token_id=tokenizer.pad_token_id,  # Explicit pad token
                 do_sample=False
             )
 
@@ -201,20 +207,8 @@ evaluate_model(teacher_model, teacher_tokenizer, validation_data)
 
 print("\n🔹 Student Model:")
 evaluate_model(student_model, student_tokenizer, validation_data)
-#### Results Display Code HERE ####
 
-# **Teacher Vocab is much larger than Students so need to configure a projection layer so both tensors will align**
 
-## This code needs a lot of memory ( > 8GB )
-## So have changed to the Vocabulary Aligner code instead which uses much less RAM
-# Define a projection layer to align teacher logits with student logits
-# class TeacherLogitProjection(nn.Module):
-#     def __init__(self, teacher_vocab_size, student_vocab_size):
-#         super(TeacherLogitProjection, self).__init__()
-#         self.projection = nn.Linear(teacher_vocab_size, student_vocab_size)
-
-#     def forward(self, teacher_logits):
-#         return self.projection(teacher_logits)
 
 class VocabularyAligner:
     def __init__(self, teacher_tokenizer, student_tokenizer):
@@ -239,41 +233,17 @@ class VocabularyAligner:
         
         return aligned_preds
 
-## This code is designed for use with the Projection layer, it is not appropriate for use with the Vocab Aligner method
-# Define Distillation Loss
-# class DistillationLoss(nn.Module):
-#     def __init__(self, alpha=0.5, temperature=2.0):
-#         super(DistillationLoss, self).__init__()
-#         self.alpha = alpha  # Weight for hard vs soft targets
-#         self.temperature = temperature  # Temperature for softening logits
-#         self.ce_loss = nn.CrossEntropyLoss()
-
-#     def forward(self, student_logits, teacher_logits, labels):
-#         # Softened teacher logits
-#         teacher_probs = nn.functional.softmax(teacher_logits / self.temperature, dim=-1)
-#         student_probs = nn.functional.log_softmax(student_logits / self.temperature, dim=-1)
-
-#         # KL Divergence loss (soft targets)
-#         distillation_loss = nn.functional.kl_div(student_probs, teacher_probs, reduction="batchmean") * (self.temperature ** 2)
-
-#         # Cross-entropy loss (hard targets)
-#         ce_loss = self.ce_loss(student_logits.view(-1, student_logits.size(-1)), labels.view(-1))
-
-#         return self.alpha * ce_loss + (1 - self.alpha) * distillation_loss
-
 
 # **Knowledge Distillation Training Loop**
 
 def train_student_with_distillation(teacher_model, student_model, train_loader, epochs=3):
-    #device = "cuda" if torch.cuda.is_available() else "cpu"
-    student_device = "cuda"
-    teacher_device = "cuda"
+   
     # Initialize alignment
     aligner = VocabularyAligner(teacher_tokenizer, student_tokenizer)
     
     # Move models to device
-    teacher_model.to(teacher_device)
-    student_model.to(student_device)
+    teacher_model.to(device)
+    student_model.to(device)
     
     # Use gradient checkpointing to save memory
     teacher_model.gradient_checkpointing_enable()
@@ -286,10 +256,9 @@ def train_student_with_distillation(teacher_model, student_model, train_loader, 
 
         batch_count = 1
         for batch in train_loader:
-            print(f"\rBatch: {batch_count}/21900", end="", flush=True)
-            inputs_ids = batch["input_ids"].to(student_device)
-            attention_mask = batch["attention_mask"].to(student_device)
-            #labels = batch["labels"].to(student_device)
+            print(f"\rBatch: {batch_count}/{total_batches}", end="", flush=True)
+            inputs_ids = batch["input_ids"].to(device)
+            attention_mask = batch["attention_mask"].to(device)
             
             with torch.no_grad():
                 # Get teacher predictions (no full logits)
@@ -297,17 +266,11 @@ def train_student_with_distillation(teacher_model, student_model, train_loader, 
                 teacher_preds = torch.argmax(teacher_outputs.logits, dim=-1)
                 
             # Project teacher predictions to student vocab
-            aligned_teacher_preds = aligner.project_logits(teacher_preds).to(teacher_device)
+            aligned_teacher_preds = aligner.project_logits(teacher_preds).to(device)
             
             # Student forward pass
             student_outputs = student_model(input_ids=inputs_ids, attention_mask=attention_mask)
             
-            # Calculate loss using aligned predictions
-            # print("Logits shape:", student_outputs.logits.shape)
-            # print("Flattened logits shape:", student_outputs.logits.view(-1, student_model.config.vocab_size).shape)
-            # print("Teacher predictions shape:", teacher_preds.shape)
-            # print("Aligned teacher predictions shape:", aligned_teacher_preds.shape)
-            # print("Flattened teacher predictions shape:", aligned_teacher_preds.view(-1).shape)
             
             loss = nn.CrossEntropyLoss()(
                 student_outputs.logits.view(-1, student_model.config.vocab_size),  # Flatten logits
@@ -320,7 +283,7 @@ def train_student_with_distillation(teacher_model, student_model, train_loader, 
 
             batch_count += 1
     
-        print(f"Epoch {epoch + 1}, Loss: {loss.item()}")
+        print(f"\nEpoch {epoch + 1}, Loss: {loss.item()}")
 
 
 # Run Training
@@ -335,4 +298,5 @@ train_student_with_distillation(
 print("\n==== Post-Distillation Evaluation ====")
 
 print("\n🔹 Student Model:")
-evaluate_model(student_model )
+evaluate_model(student_model, student_tokenizer, validation_data)
+
