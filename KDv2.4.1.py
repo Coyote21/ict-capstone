@@ -11,14 +11,14 @@ from collections import defaultdict
 from evaluate import load
 from tqdm import tqdm
 
-loader_batch_size = 16
+loader_batch_size = 4
 
 # Set calculation device as either "cuda" (GPU) or "cpu"
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
 # **Load Models**
 # Load Teacher and Student Models
-#teacher_model_name = "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B"
+# teacher_model_name = "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B"
 teacher_model_name = "Jesujuwon/distilgpt2-squad" #82M
 #student_model_name = "Locutusque/TinyMistral-248M"
 student_model_name = "tniranjan/finetuned_tinystories_33M_pretrained_tinystories_ta"
@@ -185,7 +185,8 @@ def evaluate_model(model, tokenizer, data, max_length=256):
                 attention_mask=inputs["attention_mask"],  # Explicit attention mask
                 max_length=512,
                 pad_token_id=tokenizer.pad_token_id,  # Explicit pad token
-                do_sample=False
+                #do_sample=False
+                do_sample=True
             )
 
         pred_answer = tokenizer.decode(output_ids[0], skip_special_tokens=True)
