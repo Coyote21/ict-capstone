@@ -18,7 +18,6 @@ from tqdm import tqdm
 import evaluate
 import torch
 import matplotlib.pyplot as plt
-import numpy as np
 
 # Enable/disable debugging (smaller dataset for quick runs)
 debugging = False
