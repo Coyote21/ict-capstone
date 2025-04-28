@@ -6,16 +6,30 @@ from transformers import pipeline
 def load_qa_model():
     return pipeline(
         'question-answering', 
-        model='./distilled_model',    # Local model path
-        tokenizer='./distilled_model' # Local tokenizer path
+        model='../distilled_model',    # Local model path
+        tokenizer='../distilled_model' # Local tokenizer path
     )
 
 def main():
-    st.title("Question Answering with Crafted Resoning's MiniRoBERTa-Edge")
-    st.markdown("### Provide context and ask a question")
+    st.sidebar.title("ICT Capstone Project 53")
+    st.sidebar.subheader("Semester 1, 2025")
+    st.sidebar.markdown("""Team Members:
+- Vanessa Nguyen
+- Yiran Wan
+- Parnamika Ahuja
+- Daniel Neal""")
+    
+    col1, col2 = st.columns([0.2, 0.8], vertical_alignment="center", border=False)
+    with col1:
+        st.image("./static/robot.svg")
+
+    with col2:
+        st.title("Question Answering")
+    
+    st.subheader("Prototype Distilled BERT-based AI Model")
     
     # Input section
-    context = st.text_area("Enter context:", height=200)
+    context = st.text_area("Provide context:", height=200)
     question = st.text_input("Ask a question:")
     
     qa_pipeline = load_qa_model()
@@ -27,8 +41,7 @@ def main():
         })
         
         st.markdown("### Answer:")
-        st.markdown(f"**{result['answer']}**")
-        st.write(f"Confidence score: {result['score']:.2%}")
+        st.write(result['answer'])
 
 if __name__ == "__main__":
     main()
