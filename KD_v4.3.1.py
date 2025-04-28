@@ -1,18 +1,11 @@
 # %%
 from transformers import AutoModelForQuestionAnswering, AutoTokenizer, Trainer, TrainingArguments, TrainerCallback
 from datasets import load_dataset
-#from pprint import pprint
 from tqdm import tqdm
 import evaluate
 import torch
-#import logging
 
 import matplotlib.pyplot as plt
-#import numpy as np
-
-# Suppress specific Hugging Face logging messages
-#transformers_logger = logging.getLogger("transformers")
-#transformers_logger.setLevel(logging.ERROR)
 
 debugging = False
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
